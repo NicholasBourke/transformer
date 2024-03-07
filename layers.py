@@ -28,54 +28,45 @@ class FeedForwardSubLayer(nn.Module):
         self.W2 = nn.Linear(d_ff, d_mod)
 
     def forward(self, X):
-        # input x size=[n, d_mod]
-        X = relu(self.W1(X))    # size=[n, d_ff]
-        X = self.W2(X)          # size=[n, d_mod]
+        X = relu(self.W1(X))
+        X = self.W2(X)
         return X
 
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_mod, d_k, d_v, n_heads, masked=False):
         super(MultiHeadAttention, self).__init__()
-        self.WQ = nn.ModuleList([nn.Linear(d_mod, d_k) for i in range(n_heads)])
-        self.WK = nn.ModuleList([nn.Linear(d_mod, d_k) for i in range(n_heads)])
-        self.WV = nn.ModuleList([nn.Linear(d_mod, d_v) for i in range(n_heads)])
-        self.WO = nn.Linear(n_heads*d_v, d_mod)
+        a = math.sqrt(1/d_mod)
+        self.WQ = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_k) - a) for i in range(n_heads)])
+        self.WK = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_k) - a) for i in range(n_heads)])
+        self.WV = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_v) - a) for i in range(n_heads)])
+        b = math.sqrt(1/(n_heads*d_v))
+        self.WO = nn.Parameter(2*b * torch.rand(n_heads*d_v, d_mod) - b)
         self.n_heads = n_heads
         self.masked = masked
 
-    def forward(self, Q_input, K_input, V_input):
+    def forward(self, query, key, value):
         head_attns = []
         for i in range(self.n_heads):
-            query = self.WQ[i](Q_input)
-            key = self.WK[i](K_input)
-            value = self.WV[i](V_input)
-            attn = self.scaled_dot_product_attention(query, key, value)
+            query_proj = query * self.WQ[i]
+            key_proj = key * self.WK[i]
+            value_proj = value * self.WV[i]
+            attn = self.scaled_dot_product_attention(query_proj, key_proj, value_proj)
             head_attns.append(attn)
-        Z = torch.cat(head_attns, dim=1)
-        multi_attn = self.WO(Z)
-        return multi_attn
+        return torch.cat(head_attns, dim=1) * self.WO
 
     def scaled_dot_product_attention(self, query, key, value):
-        # query size=[n, d_k]
-        # key   size=[n, d_k]
-        # value size=[n, d_v]
-        # so far only applies to Encoder self-attention
         d_k = query.size(-1)
-        query_key = torch.matmul(query, key.transpose(-2, -1))  # size=[n, n]
+        query_key = torch.matmul(query, key.transpose(-2, -1))
         if self.masked:
             query_key = torch.tril(query_key)
-        scores = log_softmax(query_key / math.sqrt(d_k), dim=0) # size=[n, n]
-        attention = torch.matmul(scores, value)                 # size=[n, d_v]
-
-        return attention
+        scores = log_softmax(query_key / math.sqrt(d_k), dim=0)
+        return torch.matmul(scores, value)
 
 
 
 
 class LayerNorm(nn.Module):
-    """Construct a layernorm module (See citation for details)."""
-
     def __init__(self, input_dim):
         super(LayerNorm, self).__init__()
         self.gain = nn.Parameter(torch.ones(input_dim))
