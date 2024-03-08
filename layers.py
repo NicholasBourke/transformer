@@ -37,11 +37,11 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, d_mod, d_k, d_v, n_heads, masked=False):
         super(MultiHeadAttention, self).__init__()
         a = math.sqrt(1/d_mod)
-        self.WQ = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_k) - a) for i in range(n_heads)])
-        self.WK = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_k) - a) for i in range(n_heads)])
-        self.WV = nn.ModuleList([nn.Parameter(2*a * torch.rand(d_mod, d_v) - a) for i in range(n_heads)])
+        self.WQ = nn.ModuleList([nn.Linear(d_mod, d_k, bias=False) for i in range(n_heads)])
+        self.WK = nn.ModuleList([nn.Linear(d_mod, d_k, bias=False) for i in range(n_heads)])
+        self.WV = nn.ModuleList([nn.Linear(d_mod, d_v, bias=False) for i in range(n_heads)])
         b = math.sqrt(1/(n_heads*d_v))
-        self.WO = nn.Parameter(2*b * torch.rand(n_heads*d_v, d_mod) - b)
+        self.WO = nn.Linear(n_heads*d_v, d_mod, bias=False)
         self.n_heads = n_heads
         self.masked = masked
 
@@ -65,7 +65,6 @@ class MultiHeadAttention(nn.Module):
 
 
 
-
 class LayerNorm(nn.Module):
     def __init__(self, input_dim):
         super(LayerNorm, self).__init__()
@@ -79,6 +78,21 @@ class LayerNorm(nn.Module):
         return self.gain / std * (input - mean) + self.bias
 
 
+
+class Embed(nn.Module):
+    def __init__(self, d_vocab, d_mod):
+        super(Embed, self).__init__()
+        a = math.sqrt(1/d_vocab)
+        self.embed = nn.Parameter(2*a * torch.rand(d_vocab, d_mod) - a)
+        self.d_vocab = d_vocab
+        self.d_mod = d_mod
+
+    def forward(self, X):
+        if X.size(-1) == self.d_vocab:
+            X_emb = torch.matmul(X, self.embed) * math.sqrt(self.d_mod)
+        if X.size(-1) == self.d_mod:
+            X_emb = torch.matmul(X, self.embed.transpose(1, 0))
+        return X_emb
 
 
 
@@ -99,9 +113,9 @@ class EncoderLayer(nn.Module):
         return R
 
 class EncoderStack(nn.Module):
-    def __init__(self, vocab_size, n, d_mod, d_ff, d_k, d_v, n_heads=8, n_layers=6):
+    def __init__(self, embed_layer, d_vocab, n, d_mod, d_ff, d_k, d_v, n_heads=8, n_layers=6):
         super(EncoderStack, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, d_mod)
+        self.embedding = embed_layer
         self.stack = nn.Sequential()
         for k in range(n_layers):
             self_attn_sublayer = MultiHeadAttention(d_mod, d_k, d_v, n_heads)
@@ -141,10 +155,10 @@ class DecoderLayer(nn.Module):
 
 
 class DecoderStack(nn.Module):
-    def __init__(self, memory, vocab_size, n, d_mod, d_ff, d_k, d_v, n_heads=8, n_layers=6):
+    def __init__(self, embed_layer, memory, d_vocab, n, d_mod, d_ff, d_k, d_v, n_heads=8, n_layers=6):
         super(DecoderStack, self).__init__()
         self.memory = memory
-        self.embedding = nn.Embedding(vocab_size, d_mod)
+        self.embedding = embed_layer
         self.stack = nn.Sequential()
         for k in range(n_layers):
             self_attn_sublayer = MultiHeadAttention(d_mod, d_k, d_v, n_heads, masked=True)
@@ -152,13 +166,13 @@ class DecoderStack(nn.Module):
             feedforward_sublayer = FeedForwardSubLayer(d_mod, d_ff)
             layer = DecoderLayer(memory, n, d_mod, self_attn_sublayer, encdec_attn_sublayer, feedforward_sublayer)
             self.stack.append(layer)
-        self.probability = nn.Linear(d_mod, vocab_size)
+        a = math.sqrt(1/d_mod)
 
     def forward(self, Y):
         Y = self.embedding(Y)
         Y = positional_encoding(Y)
         output = self.stack(Y)
-        prob_dist = log_softmax(self.probability(output), dim=1)
+        prob_dist = log_softmax(self.embedding(output), dim=1)
         return prob_dist
 
 
