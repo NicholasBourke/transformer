@@ -6,7 +6,7 @@ The intention is to gain deeper understanding of the Transformer network archite
 
 PROGRESS
 
-
+- Basic structure seems to be working as expected, but yet to write training functions or work with any actual data. Forward proagation runs without any issues on dummy data in main.py and outputs are as expected.
 
 
 DISCUSSION:
