@@ -48,18 +48,19 @@ class MultiHeadAttention(nn.Module):
     def forward(self, query, key, value):
         head_attns = []
         for i in range(self.n_heads):
-            query_proj = query * self.WQ[i]
-            key_proj = key * self.WK[i]
-            value_proj = value * self.WV[i]
+            query_proj = self.WQ[i](query)
+            key_proj = self.WK[i](key)
+            value_proj = self.WV[i](value)
             attn = self.scaled_dot_product_attention(query_proj, key_proj, value_proj)
             head_attns.append(attn)
-        return torch.cat(head_attns, dim=1) * self.WO
+        return self.WO(torch.cat(head_attns, dim=1))
 
     def scaled_dot_product_attention(self, query, key, value):
         d_k = query.size(-1)
         query_key = torch.matmul(query, key.transpose(-2, -1))
         if self.masked:
-            query_key = torch.tril(query_key)
+            mask = torch.tril(torch.ones(query_key.size())).type(torch.uint8)
+            query_key.masked_fill_(mask == 0, -1e9)
         scores = log_softmax(query_key / math.sqrt(d_k), dim=0)
         return torch.matmul(scores, value)
 
