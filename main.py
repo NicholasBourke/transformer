@@ -1,22 +1,20 @@
 import torch
-from torch.nn.functional import one_hot, relu, log_softmax
 from dataclasses import dataclass
-
 from model import Transformer
-
-
 
 @dataclass
 class ModelConfig:
-    L: int = 512
-    K: int = 256
-    D: int = 512
-    n_layer: int = 12
-    n_head: int = 2
-    dropout: float = 0.2
-    bias: bool = False
-
+    L: int = 64             # sequence length
+    K: int = 32000          # vocabulary size
+    D: int = 512            # model dimension 
+    n_layer: int = 6
+    n_head: int = 8
+    dropout: float = 0.1
 
 cfg = ModelConfig()
-
 model = Transformer(cfg)
+
+x = torch.randint(cfg.K, (16, cfg.L))
+y = torch.randint(cfg.K, (16, cfg.L))
+
+p = model(x, y)

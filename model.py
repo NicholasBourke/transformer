@@ -6,33 +6,20 @@ import torch.nn.functional as F
 
 
 def positional_encoding(x):
-    n, d = x.size()
+    b, n, d = x.size()
 
     positions = torch.arange(n) + 1
     factors = torch.exp(torch.arange(0, d, 2) / d * -math.log(10000.0))
     terms = torch.outer(positions, factors)
 
-    P = torch.zeros((n, d))
-    P[:, 0::2] = torch.sin(terms)
-    P[:, 1::2] = torch.cos(terms)
+    p = torch.zeros((n, d))
+    p[:, 0::2] = torch.sin(terms)
+    p[:, 1::2] = torch.cos(terms)
 
-    return x + P
+    p = p.unsqueeze(0).repeat(b, 1, 1)
 
+    return x + p
 
-class Embed(nn.Module):
-    def __init__(self, d_vocab, d_mod):
-        super(Embed, self).__init__()
-        a = math.sqrt(1/d_vocab)
-        self.embed = nn.Parameter(2*a * torch.rand(d_vocab, d_mod) - a)
-        self.d_vocab = d_vocab
-        self.d_mod = d_mod
-
-    def forward(self, X):
-        if X.size(-1) == self.d_vocab:
-            X_emb = torch.matmul(X, self.embed) * math.sqrt(self.d_mod)
-        if X.size(-1) == self.d_mod:
-            X_emb = torch.matmul(X, self.embed.transpose(1, 0))
-        return X_emb
 
 
 class LayerNorm(nn.Module):
@@ -58,17 +45,20 @@ class MultiHeadAttention(nn.Module):
         self.cfg = cfg
         self.masked = masked
 
-        self.Wqkv = nn.Linear(cfg.D, 3*cfg.D, bias=cfg.bias)
-        self.Wo = nn.Linear(cfg.D, cfg.D, bias=cfg.bias)
+        # self.Wqkv = nn.Linear(cfg.D, 3*cfg.D, bias=False)
+        self.Wq = nn.Linear(cfg.D, cfg.D, bias=False)
+        self.Wk = nn.Linear(cfg.D, cfg.D, bias=False)
+        self.Wv = nn.Linear(cfg.D, cfg.D, bias=False)
+        self.Wo = nn.Linear(cfg.D, cfg.D, bias=False)
         self.dropout = nn.Dropout(cfg.dropout)
 
-    def forward(self, x):
-        q, k, v = self.Wqkv(x).split(self.cfg.D, dim=-1)
-        q = q.view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
-        k = k.view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
-        v = v.view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
+    def forward(self, q, k, v):
+        dim = q.size()
+        q = self.Wq(q).view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
+        k = self.Wk(k).view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
+        v = self.Wv(v).view(-1, self.cfg.L, self.cfg.n_head, self.cfg.D//self.cfg.n_head).transpose(1, 2)
 
-        attn = self.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(x.size())
+        attn = self.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(dim)
         return self.dropout(self.Wo(attn))
 
     def scaled_dot_product_attention(self, q, k, v):
@@ -102,20 +92,18 @@ class EncoderLayer(nn.Module):
         self.nrm_2 = LayerNorm((cfg.L, cfg.D))
 
     def forward(self, x):
-        a = self.nrm_1(x + self.dropout(self.attn(x)))
-        c = self.nrm_2(a + self.dropout(self.ff(a)))
+        a = self.nrm_1(x + self.attn(x, x, x))
+        c = self.nrm_2(a + self.ff(a))
         return c
 
 
 class EncoderStack(nn.Module):
     def __init__(self, cfg):
         super(EncoderStack, self).__init__()
-        self.embed = nn.Embedding(cfg.K, cfg.D)
         self.stack = nn.ModuleList([EncoderLayer(cfg) for _ in range(cfg.n_layer)])
         self.dropout = nn.Dropout(cfg.dropout)
 
     def forward(self, x):
-        x = self.embed(x)
         x = self.dropout(positional_encoding(x))
         for layer in self.stack:
             x = layer(x)
@@ -143,12 +131,10 @@ class DecoderLayer(nn.Module):
 class DecoderStack(nn.Module):
     def __init__(self, cfg):
         super(DecoderStack, self).__init__()
-        self.embed = nn.Embedding(cfg.K, cfg.D)
         self.stack = nn.ModuleList([DecoderLayer(cfg) for _ in range(cfg.n_layer)])
         self.dropout = nn.Dropout(cfg.dropout)
 
     def forward(self, y, c):
-        y = self.embed(y)
         y = self.dropout(positional_encoding(y))
         for layer in self.stack:
             y = layer(y, c)
@@ -159,11 +145,17 @@ class DecoderStack(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, cfg):
         super(Transformer, self).__init__()
+        self.embed = nn.Embedding(cfg.K, cfg.D)
         self.encoder = EncoderStack(cfg)
         self.decoder = DecoderStack(cfg)
         self.linear = nn.Linear(cfg.D, cfg.K, bias=False)
 
+        self.linear.weight = self.embed.weight # weight tying
+
     def forward(self, x, y):
+        x = self.embed(x)
+        y = self.embed(y)
         c = self.encoder(x)
         z = self.decoder(y, c)
-        return F.softmax(self.linear(z))
+        return F.softmax(self.linear(z), dim=-1)
+ 
